@@ -1,6 +1,42 @@
 #!/usr/bin/env bash
 set -eE
 
+UP_VERSION=v0.16.1
+
+EMOJI_FAIL=❌
+EMOJI_SUCCESS=✅
+INSTALL_PATH_UP="/usr/local/bin"
+SETUP_FOLDER=common
+TIMEOUT=180s
+
+apply_provider() {
+  printf "Installing the provider (this will take a few minutes)...\n"
+  kubectl apply -f "$SETUP_FOLDER"/provider.yaml
+
+  echo "waiting for condition=Installed"
+  kubectl wait "providers.pkg.crossplane.io/provider-aws" --for=condition=Installed --timeout="$TIMEOUT"
+  
+  echo "waiting for condition=Healthy"
+  kubectl wait "providers.pkg.crossplane.io/provider-aws" --for=condition=Healthy --timeout="$TIMEOUT"
+}
+
+apply_provider_config(){
+  kubectl apply -f "$SETUP_FOLDER"/providerConfig.yaml
+}
+
+apply_secret() {
+  cat <<EOF | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: aws-secret
+  namespace: upbound-system
+stringData:
+  creds: |
+    $(printf "[default]\n    aws_access_key_id = %s\n    aws_secret_access_key = %s" "${AWS_KEY}" "${AWS_SECRET}")
+EOF
+}
+
 are_aws_env_creds_set() {
   #if [ -n "$AWS_ACCESS_KEY_ID" ] && [ -n "$AWS_SECRET_ACCESS_KEY" ]; then
   if [ -n "${AWS_ACCESS_KEY_ID+x}" ] && \
@@ -10,6 +46,28 @@ are_aws_env_creds_set() {
   else
     return 1
   fi
+}
+
+get_aws_creds() {
+  unset AWS_KEY AWS_SECRET
+  if are_aws_env_creds_set; then
+    echo "using credentials from environment"
+    export AWS_KEY="$AWS_ACCESS_KEY_ID"
+    export AWS_SECRET="$AWS_SECRET_ACCESS_KEY"
+  else
+    import_from_file_sections
+    if [ -n "$aws_access_key_id" ] && [ -n "$aws_secret_access_key" ]; then
+      echo "using credentials from aws credentials file"
+      export AWS_KEY="$aws_access_key_id"
+      export AWS_SECRET="$aws_secret_access_key"
+    else
+      get_creds_via_prompting
+    fi
+  fi
+}
+
+get_creds_via_prompting() {
+  read -p "AWS access_key_id: " aws_access_key; read -sp "AWS secret_access_key: " aws_secret_key; export AWS_KEY=$aws_access_key; export AWS_SECRET=$aws_secret_key; printf "\n"
 }
 
 import_from_file_sections() {
@@ -40,61 +98,43 @@ import_from_file_sections() {
     done < "$config_file"
 }
 
-get_creds_via_prompting() {
-  read -p "AWS access_key_id: " aws_access_key; read -sp "AWS secret_access_key: " aws_secret_key; export AWS_KEY=$aws_access_key; export AWS_SECRET=$aws_secret_key; printf "\n"
+install_up_cli() {
+  if is_up_cli_installed; then 
+    if [ $(up --version) != "$UP_VERSION" ]; then
+      echo "up version at $(which up): $(up --version)"
+      echo "remove up cli via 'rm $(which up)' and run this script again (script tested with $UP_VERSION)"
+      exit 1
+    else
+      echo "$EMOJI_SUCCESS up $(up --version) already installed at $(which up)"
+    fi
+  else
+    echo "Installing up CLI..."
+    # curl -sL "https://cli.upbound.io" | sh >/dev/null
+    mkdir -p "$INSTALL_PATH_UP"
+    sudo mv up "$INSTALL_PATH_UP"
+    if is_up_cli_installed; then
+      echo "$EMOJI_SUCCESS up CLI installed to $INSTALL_PATH_UP"
+    else
+      echo "error installint up cli"
+      return 1
+    fi
+  fi
 }
 
-unset AWS_KEY AWS_SECRET
-if are_aws_env_creds_set; then
-  echo "using credentials from environment"
-  export AWS_KEY="$AWS_ACCESS_KEY_ID"
-  export AWS_SECRET="$AWS_SECRET_ACCESS_KEY"
-else
-  import_from_file_sections
-  if [ -n "$aws_access_key_id" ] && [ -n "$aws_secret_access_key" ]; then
-    echo "using credentials from aws credentials file"
-    export AWS_KEY="$aws_access_key_id"
-    export AWS_SECRET="$aws_secret_access_key"
-  else
-    get_creds_via_prompting
-  fi
-fi
+install_uxp() {
+  if ! kubectl -n upbound-system get deployment crossplane > /dev/null 2>&1; then printf "Installing UXP...\n" && up uxp install; fi
 
-if ! up --version > /dev/null 2>&1; then printf "Installing up CLI...\n"; curl -sL "https://cli.upbound.io" | sh; sudo mv up /usr/local/bin/; fi
+  printf "Checking the UXP installation (this only takes a minute)...\n"
+  kubectl -n upbound-system wait deployment crossplane --for=condition=Available --timeout="$TIMEOUT"
+}
 
-if ! kubectl -n upbound-system get deployment crossplane > /dev/null 2>&1; then printf "Installing UXP...\n" && up uxp install; fi
+is_up_cli_installed() {
+  up --version > /dev/null 2>&1
+}
 
-printf "Checking the UXP installation (this only takes a minute)...\n"
-kubectl -n upbound-system wait deployment crossplane --for=condition=Available --timeout=180s
-
-
-printf "Installing the provider (this will take a few minutes)...\n"
-cat <<EOF | kubectl apply -f -
-apiVersion: pkg.crossplane.io/v1
-kind: Provider
-metadata:
-  name: provider-aws
-spec:
-  package: xpkg.upbound.io/upbound/provider-aws:v0.21.0
-EOF
-kubectl wait "providers.pkg.crossplane.io/provider-aws" --for=condition=Installed --timeout=180s
-kubectl wait "providers.pkg.crossplane.io/provider-aws" --for=condition=Healthy --timeout=180s
-
-
-
-cat <<EOF | kubectl apply -f -
-apiVersion: v1
-kind: Secret
-metadata:
-  name: aws-secret
-  namespace: upbound-system
-stringData:
-  creds: |
-    $(printf "[default]\n    aws_access_key_id = %s\n    aws_secret_access_key = %s" "${AWS_KEY}" "${AWS_SECRET}")
-EOF
-
-cat <<EOF | kubectl apply -f -
-apiVersion: aws.upbound.io/v1beta1
-kind: ProviderConfig
-metadata:
-  name: default
+get_aws_creds
+install_up_cli
+install_uxp
+apply_provider
+apply_secret
+apply_provider_config
