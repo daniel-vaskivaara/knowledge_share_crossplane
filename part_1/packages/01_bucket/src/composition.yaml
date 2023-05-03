@@ -1,0 +1,28 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: default
+  labels:
+    provider: aws
+spec:
+  compositeTypeRef:
+    apiVersion: xplane1.demo.tanuu.fi/v1alpha1
+    kind: XHello
+  writeConnectionSecretsToNamespace: upbound-system
+  resources:
+    - name: s3Bucket
+      base:
+        apiVersion: s3.aws.upbound.io/v1beta1
+        kind: Bucket
+        metadata:
+          labels:
+            crossplane.io/external-name: xplane1_demo
+          name: xplane_demo_bucket
+        spec:
+          forProvider:
+            forceDestroy: true
+            region: eu-north-1
+      # patches:
+      #   - type: FromCompositeFieldPath
+      #     fromFieldPath: spec.name
+      #     toFieldPath: metadata.name

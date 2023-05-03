@@ -1,0 +1,39 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xhellos.xplane1.demo.tanuu.fi
+spec:
+  group: xplane1.demo.tanuu.fi
+  names:
+    kind: XHello
+    plural: xhellos
+  claimNames:
+    kind: Hello
+    plural: hellos
+  defaultCompositionRef:
+    name: default
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                environment:
+                  type: string
+                  oneOf:
+                    - pattern: "poc"
+                    - pattern: "staging"
+                    - pattern: "prod"
+                  default: "poc"
+                name:
+                  type: string
+                region:
+                  type: string
+                  default: "eu-north-1"
+              required:
+                - name

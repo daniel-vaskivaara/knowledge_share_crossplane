@@ -1,0 +1,7 @@
+apiVersion: xplane1.demo.tanuu.fi/v1alpha1
+kind: Hello
+metadata:
+  name: hello-bucket
+  namespace: upbound-system
+spec:
+  name: xplane_demo_bucket
