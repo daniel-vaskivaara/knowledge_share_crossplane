@@ -10,7 +10,7 @@ metadata:
       An introductory example to Crossplane and a Composition for the official Upbound AWS provider.
       This will enable provisioning of an S3 bucket
     provider: aws
-  name: idp-xplane-1
+  name: hello-bucket
 spec:
   crossplane:
     version: ">=v1.11.3-up.1"
