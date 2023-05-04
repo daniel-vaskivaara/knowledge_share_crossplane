@@ -1,5 +1,5 @@
 # Knowledge Share - Crossplane Parts 1 & 2
-    Repo to accompany the talks given as part of the "Month of IDP (Internal Developer Platform)" series, May 2023
+  Repo to accompany the talks given as part of the "Month of IDP (Internal Developer Platform)" series, May 2023
 
 ## setup
 
@@ -26,6 +26,22 @@
       ```
       kubectl apply -f part_1/packages/01_bucket/src --recursive
       ```
+
+## packages - sample workflow
+  ```
+  # Build
+  up xpkg build --output=hello-bucket.xpkg
+  docker load -i hello-bucket.xpkg
+
+  # Push to Registry
+  aws ecr get-login-password --region eu-north-1 | docker login --username AWS --password-stdin public.ecr.aws/h6b3h6y7
+  docker tag [sha from load command] public.ecr.aws/h6b3h6y7/xplane_test_v0.1.0
+  docker push public.ecr.aws/h6b3h6y7/xplane_test_v0.1.0
+  
+  # Deploy
+  kubectl apply -f part_1/packages/01_bucket/xpkg.yaml
+  ```
+
 
 ## status check:
 
