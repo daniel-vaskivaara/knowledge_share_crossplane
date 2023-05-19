@@ -1,0 +1,1400 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: main
+  labels:
+    service: eks
+    provider: aws
+    type: composition
+spec:
+  compositeTypeRef:
+    apiVersion: xplane2.demo.tanuu.fi/v1alpha1
+    kind: XEKS
+  patchSets:
+  - name: region
+    patches:
+      - type: FromCompositeFieldPath
+        fromFieldPath: spec.region
+        toFieldPath: spec.forProvider.region
+  - name: setName
+    patches:
+      - type: FromCompositeFieldPath
+        fromFieldPath: spec.name
+        toFieldPath: metadata.name
+  - name: contactLabels
+    patches:
+      - type: FromCompositeFieldPath
+        fromFieldPath:  metadata.labels.created_by
+        toFieldPath: metadata.labels.created_by
+  writeConnectionSecretsToNamespace: upbound-system
+  resources:
+    
+    ###############################################
+    # * * * IAM (Identity & Access Mgmt) * * *
+    #
+
+    # # # Role - EKS Cluster # # #
+    - name: roleEKSCluster
+      base:
+        apiVersion: iam.aws.upbound.io/v1beta1
+        kind: Role
+        metadata:
+          labels:
+            id: role-eks-cluster
+            resourceType: Role-IAM
+        spec:
+          forProvider:
+            assumeRolePolicy: |
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Effect": "Allow",
+                    "Principal": {
+                      "Service": "eks.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                  }
+                ]
+              }
+            tags:
+              Name: xplane-role-eks-cluster
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-role-eks-cluster"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-role-eks-cluster"
+
+    # # # Role - EKS Node # # #
+    - name: roleEKSNodeGroup
+      base:
+        apiVersion: iam.aws.upbound.io/v1beta1
+        kind: Role
+        metadata:
+          labels:
+            id: role-eks-nodegroup
+            resourceType: Role-IAM
+        spec:
+          forProvider:
+            assumeRolePolicy: |
+              {
+                "Version": "2012-10-17",
+                "Statement": [
+                  {
+                    "Effect": "Allow",
+                    "Principal": {
+                      "Service": "ec2.amazonaws.com"
+                    },
+                    "Action": "sts:AssumeRole"
+                  }
+                ]
+              }
+            tags:
+              Name: xplane-role-eks-nodegroup
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-role-eks-nodegroup"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-role-eks-nodegroup"
+
+    # # # Role Policy Attachment - AmazonEKSClusterPolicy <-> eks
+    - name: rpaCluster
+      base:
+        apiVersion: iam.aws.upbound.io/v1beta1
+        kind: RolePolicyAttachment
+        metadata:
+          labels:
+            id: eksClusterPolicy
+        spec:
+          forProvider:
+            policyArn: arn:aws:iam::aws:policy/AmazonEKSClusterPolicy
+            roleSelector:
+              matchLabels:
+                id: role-eks-cluster
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rpa-eks-cluster"
+
+    # # # Role Policy Attachment - AmazonEC2ContainerRegistryReadOnly <-> eks_node
+    - name: rpaEc2Container
+      base:
+        apiVersion: iam.aws.upbound.io/v1beta1
+        kind: RolePolicyAttachment
+        metadata:
+          labels:
+            name: ec2ContainerRegistryReadOnly
+        spec:
+          forProvider:
+            policyArn: arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryReadOnly
+            roleSelector:
+              matchLabels:
+                id: role-eks-nodegroup
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rpa-ec2-container-reg-read-only"
+
+    # # # Role Policy Attachment - AmazonEKS_CNI_Policy <-> eks_node
+    - name: rpaEksCni
+      base:
+        apiVersion: iam.aws.upbound.io/v1beta1
+        kind: RolePolicyAttachment
+        metadata:
+          labels:
+            name: eksCniPolicy
+        spec:
+          forProvider:
+            policyArn: arn:aws:iam::aws:policy/AmazonEKS_CNI_Policy
+            roleSelector:
+              matchLabels:
+                id: role-eks-nodegroup
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rpa-cni"
+
+    # # # Role Policy Attachment - AmazonEKSWorkerNodePolicy <-> eks_node
+    - name: rpaEksWorkerNode
+      base:
+        apiVersion: iam.aws.upbound.io/v1beta1
+        kind: RolePolicyAttachment
+        metadata:
+          labels:
+            name: eksWorkerNodePolicy
+        spec:
+          forProvider:
+            policyArn: arn:aws:iam::aws:policy/AmazonEKSWorkerNodePolicy
+            roleSelector:
+              matchLabels:
+                id: role-eks-nodegroup
+      patches:
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rpa-eks-wrk-node"
+
+    ###############################################
+    # * * * NETWORKING - COMMON * * *
+    #
+
+    # # # Subnet Private-1 # # #
+    - name: subnet-private-1
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Subnet
+        metadata:
+          annotations:
+            crossplane.io/paused: "false"
+          labels:
+            access: private
+            id: subnet-private-1
+            resourceType: Subnet
+        spec:
+          forProvider:
+            availabilityZone: patch-target
+            cidrBlock: 192.168.64.0/19
+            mapPublicIPOnLaunch: true
+            region: patch-target
+            tags:
+              Name: xplane-private-1
+              kubernetes.io/role/internal-elb: "1"
+            vpcIdSelector:
+              matchControllerRef: true
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.region
+          toFieldPath: spec.forProvider.availabilityZone
+          transforms:
+            - type: string
+              string:
+                fmt: "%sa"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-private-1"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-private-1"
+
+    # # # Subnet Private-2 # # #
+    - name: subnet-private-2
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Subnet
+        metadata:
+          annotations:
+            crossplane.io/paused: "false"
+          labels:
+            access: private
+            id: subnet-private-2
+            resourceType: Subnet
+        spec:
+          forProvider:
+            availabilityZone: patch-target
+            cidrBlock: 192.168.96.0/19
+            mapPublicIPOnLaunch: true
+            region: patch-target
+            tags:
+              Name: xplane-private-2
+              kubernetes.io/role/internal-elb: "1"
+            vpcIdSelector:
+              matchControllerRef: true
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.region
+          toFieldPath: spec.forProvider.availabilityZone
+          transforms:
+            - type: string
+              string:
+                fmt: "%sb"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-private-2"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-private-2"
+
+    # # # Subnet Private-3 # # #
+    - name: subnet-private-3
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Subnet
+        metadata:
+          annotations:
+            crossplane.io/paused: "false"
+          labels:
+            access: private
+            id: subnet-private-3
+            resourceType: Subnet
+        spec:
+          forProvider:
+            availabilityZone: patch-target
+            cidrBlock: 192.168.128.0/19
+            mapPublicIPOnLaunch: true
+            region: patch-target
+            tags:
+              Name: xplane-private-3
+              kubernetes.io/role/internal-elb: "1"
+            vpcIdSelector:
+              matchControllerRef: true
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.region
+          toFieldPath: spec.forProvider.availabilityZone
+          transforms:
+            - type: string
+              string:
+                fmt: "%sc"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-private-3"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-private-3"
+
+    # # # Subnet Public-1 # # #
+    - name: subnet-public-1
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Subnet
+        metadata:
+          annotations:
+            crossplane.io/paused: "false"
+          labels:
+            access: public
+            id: subnet-public-1
+            resourceType: Subnet
+        spec:
+          forProvider:
+            availabilityZone: patch-target
+            cidrBlock: 192.168.0.0/19
+            enableResourceNameDnsARecordOnLaunch: true
+            mapPublicIPOnLaunch: true
+            region: patch-target
+            tags:
+              Name: xplane-public-1
+              kubernetes.io/role/elb: "1"
+            vpcIdSelector:
+              matchControllerRef: true
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.region
+          toFieldPath: spec.forProvider.availabilityZone
+          transforms:
+            - type: string
+              string:
+                fmt: "%sa"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-public-1"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-public-1"
+
+    # # # Subnet Public-2 # # #
+    - name: subnet-public-2
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Subnet
+        metadata:
+          annotations:
+            crossplane.io/paused: "false"
+          labels:
+            access: public
+            componentType: Subnet
+            id: subnet-public-2
+        spec:
+          forProvider:
+            availabilityZone: patch-target
+            cidrBlock: 192.168.32.0/19
+            enableResourceNameDnsARecordOnLaunch: true
+            mapPublicIPOnLaunch: true
+            region: patch-target
+            tags:
+              Name: xplane-public-2
+              kubernetes.io/role/elb: "1"
+            vpcIdSelector:
+              matchControllerRef: true
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.region
+          toFieldPath: spec.forProvider.availabilityZone
+          transforms:
+            - type: string
+              string:
+                fmt: "%sb"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-public-2"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-public-2"
+
+    # # # VPC # # #
+    - name: vpc
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: VPC
+        metadata:
+          annotations:
+            crossplane.io/external-name: xplane-VPC
+          labels:
+            resourceType: VPC
+        spec:
+          forProvider:
+            cidrBlock: 192.168.0.0/16
+            enableDnsHostnames: true
+            enableDnsSupport: true
+            region: patch-target
+            tags:
+              Name: xplane-VPC
+      patches:
+        - type: PatchSet
+          patchSetName: contactLabels
+        - type: PatchSet
+          patchSetName: region
+        - type: PatchSet
+          patchSetName: setName
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-VPC"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.annotations.crossplane.io/external-name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-VPC"
+
+    ##############################################
+    # * * * NETWORKING - PRIVATE-SUBNET-1 * * *
+    #
+
+    # # # ElasticIP-1 (EIP) # # #
+    - name: elasticIp1
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: EIP
+        metadata:
+          labels:
+            id: eip-1
+            resourceType: EIP
+        spec:
+          forProvider:
+            region: patch-target
+            tags:
+              Name: xplane-eip-1
+            vpc: true
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-eip-1"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-eip-1"
+
+    # # # NATGateway-1 # # #
+    - name: NATGateway1
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: NATGateway
+        metadata:
+          # annotations:
+          #   meta.upbound.io: ec2/v1beta1/natgateway
+            # upjet.upbound.io/manual-intervention: This resource exceeds limit of 8 NAT gateways.
+          labels:
+            id: nat-gw-1
+            resourceType: NATGateway
+        spec:
+          forProvider:
+            allocationIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: eip-1
+            connectivityType: public
+            region: patch-target
+            subnetIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: subnet-public-1
+            tags:
+              Name: xplane-nat-gw-1
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-nat-gw-1"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-nat-gw-1"
+
+    # # # Route - Private-1 # # #
+    - name: routePrivate1
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Route
+        metadata:
+          labels:
+            access: private
+            id: route-1
+            resourceType: Route
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            destinationCidrBlock: 0.0.0.0/0
+            natGatewayIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: nat-gw-1
+            region: patch-target
+            routeTableIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: rt-private-1
+              policy:
+                resolve: Always
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-route-private-1"
+
+    # # # RouteTable - Private-1 # # #
+    - name: routeTablePrivate1
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: RouteTable
+        metadata:
+          labels:
+            access: private
+            id: rt-private-1
+            resourceType: RouteTable
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            region: patch-target
+            tags:
+              Name: xplane-rt-private-1
+            vpcIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                resourceType: VPC
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rt-private-1"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rt-private-1"
+
+    # # # RouteTableAssociation - Private1 # # #
+    - name: routeTableAssociation-private1
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: RouteTableAssociation
+        metadata:
+          labels:
+            resourceType: RouteTableAssociation
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            region: patch-target
+            routeTableIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: rt-private-1
+            subnetIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: subnet-private-1
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rta-private-1"
+
+    ###############################################
+    # * * * NETWORKING - PRIVATE-SUBNET-2 * * *
+    #
+
+    # # # EIP-2  # # #
+    - name: elasticIp2
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: EIP
+        metadata:
+          labels:
+            id: eip-2
+            resourceType: EIP
+        spec:
+          forProvider:
+            region: patch-target
+            tags:
+              Name: xplane-eip-2
+            vpc: true
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-eip-2"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-eip-2"
+
+    # # # NAT Gateway 2 # # #
+    - name: NATGateway2
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: NATGateway
+        metadata:
+          #annotations:
+          #  meta.upbound.io: ec2/v1beta1/natgateway
+          #  upjet.upbound.io/manual-intervention: This resource exceeds limit of 8 NAT gateways.
+          labels:
+            id: nat-gw-2
+            resourceType: NATGateway
+        spec:
+          forProvider:
+            allocationIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: eip-2
+            connectivityType: public
+            region: patch-target
+            subnetIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: subnet-public-2
+            tags:
+              Name: xplane-nat-gw-2
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-nat-gw-2"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-nat-gw-2"
+
+    # # # Route - Private-2 # # #
+    - name: routePrivate2
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Route
+        metadata:
+          labels:
+            access: private
+            id: route-2
+            resourceType: Route
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            destinationCidrBlock: 0.0.0.0/0
+            natGatewayIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: nat-gw-2
+            region: patch-target
+            routeTableIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: rt-private-2
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-route-private-2"
+
+    # # # RouteTable - Private-2 # # #
+    - name: routeTablePrivate2
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: RouteTable
+        metadata:
+          labels:
+            access: private
+            id: rt-private-2
+            resourceType: RouteTable
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            region: patch-target
+            tags:
+              Name: xplane-rt-private-2
+            vpcIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                resourceType: VPC
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rt-private-2"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rt-private-2"
+
+    # # # RouteTableAssociation - Private-2 # # #
+    - name: routeTableAssociation-private2
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: RouteTableAssociation
+        metadata:
+          labels:
+            resourceType: RouteTableAssociation
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            region: patch-target
+            routeTableIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: rt-private-2
+            subnetIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: subnet-private-2
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rta-private-2"
+
+    ###############################################
+    # * * * NETWORKING - PRIVATE-SUBNET-3 * * *
+    #
+
+    # # # EIP-3  # # #
+    - name: elasticIp3
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: EIP
+        metadata:
+          labels:
+            id: eip-3
+            resourceType: EIP
+        spec:
+          forProvider:
+            region: patch-target
+            tags:
+              Name: xplane-eip-3
+            vpc: true
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-eip-3"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-eip-3"
+
+    # # # NATGateway-3 # # #
+    - name: NATGateway3
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: NATGateway
+        metadata:
+          #annotations:
+          #  meta.upbound.io: ec2/v1beta1/natgateway
+          #  upjet.upbound.io/manual-intervention: This resource exceeds limit of 8 NAT gateways.
+          labels:
+            id: nat-gw-3
+            resourceType: NATGateway
+        spec:
+          forProvider:
+            allocationIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: eip-3
+            connectivityType: public
+            region: patch-target
+            subnetIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: subnet-public-2
+            tags:
+              Name: xplane-nat-gw-3
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-nat-gw-3"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-nat-gw-3"
+
+    # # # Route - Private-3 # # #
+    - name: routePrivate3
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: Route
+        metadata:
+          labels:
+            access: private
+            id: route-3
+            resourceType: Route
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            destinationCidrBlock: 0.0.0.0/0
+            natGatewayIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: nat-gw-3
+            region: patch-target
+            routeTableIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: rt-private-3
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-route-private-3"
+
+    # # # RouteTable - Private-3 # # #
+    - name: routeTablePrivate3
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: RouteTable
+        metadata:
+          labels:
+            access: private
+            id: rt-private-3
+            resourceType: RouteTable
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            region: patch-target
+            tags:
+              Name: xplane-rt-private-3
+            vpcIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                resourceType: VPC
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rt-private-3"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rt-private-3"
+
+    # # # RouteTableAssociation - Private-3 # # #
+    - name: routeTableAssociation-private-3
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: RouteTableAssociation
+        metadata:
+          labels:
+            resourceType: RouteTableAssociation
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            region: patch-target
+            routeTableIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: rt-private-3
+            subnetIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: subnet-private-3
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-rta-private-3"
+
+    ###############################################
+    # * * * SECURITY * * *
+    #
+
+    # # # Security Group - EKS Cluster # # #
+    - name: securityGroupEKSCluster
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: SecurityGroup
+        metadata:
+          labels:
+            id: sg-eks-cluster
+            resourceType: SecurityGroup
+            service: EKS
+        spec:
+          forProvider:
+            region: patch-target
+            tags:
+              Name: xplane-sg-eks-cluster
+            vpcIdSelector:
+              matchControllerRef: true
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-sg-eks-cluster"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-sg-eks-cluster"
+
+    # # # Security Group Rule - EKS Cluster OUT1 # # #
+    - name: sgrEKSClusterOut1
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: SecurityGroupRule
+        metadata:
+          annotations:
+            type: ec2/v1beta1/securitygrouprule
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            cidrBlocks:
+              - 0.0.0.0/0
+            description: "Allow EKS NodeGroup full egress access"
+            fromPort: 0
+            protocol: all
+            region: patch-target
+            securityGroupIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: sg-eks-cluster
+            toPort: 65535
+            type: egress
+      patches:
+        - type: PatchSet
+          patchSetName: region
+
+    # # # Security Group - EKS NodeGroup # # #
+    - name: securityGroupEKSNodeGroup
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: SecurityGroup
+        metadata:
+          labels:
+            id: sg-eks-nodegroup
+            # name: sg-eks-nodegroup # adding due to bug in sgr not linking to id?
+            resourceType: SecurityGroup
+            service: EKS
+        spec:
+          forProvider:
+            region: patch-target
+            tags:
+              Name: xplane-sg-eks-nodegroup
+            vpcIdSelector:
+              matchControllerRef: true
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-sg-eks-nodegroup"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-sg-eks-nodegroup"
+
+
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: SecurityGroupRule
+        metadata:
+          annotations:
+            type: ec2/v1beta1/securitygrouprule
+        spec:
+          forProvider:
+            description: "Allow EKS NodeGroup in the door"
+            fromPort: 0
+            protocol: all
+            region: patch-target
+            securityGroupIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: sg-kafka
+            sourceSecurityGroupIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: sg-eks-nodegroup
+            toPort:
+            type: ingress
+      patches:
+        - type: PatchSet
+          patchSetName: region
+
+    # # # Security Group Rule - EKS NodeGroup IN1 # # #
+    - name: sgrEKSNodeGroupIn1
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: SecurityGroupRule
+        metadata:
+          annotations:
+            type: ec2/v1beta1/securitygrouprule
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            description: "Allow EKS Cluster to enter EKS NodeGroup"
+            fromPort: 0
+            protocol: all
+            region: patch-target
+            securityGroupIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: sg-eks-nodegroup
+            sourceSecurityGroupIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: sg-eks-cluster
+            toPort: 65535
+            type: ingress
+      patches:
+        - type: PatchSet
+          patchSetName: region
+
+    # # # Security Group Rule - EKS NodeGroup OUT1 # # #
+    - name: sgrEKSNodeGroupOut1
+      base:
+        apiVersion: ec2.aws.upbound.io/v1beta1
+        kind: SecurityGroupRule
+        metadata:
+          annotations:
+            type: ec2/v1beta1/securitygrouprule
+        spec:
+          deletionPolicy: Delete
+          forProvider:
+            cidrBlocks:
+              - 0.0.0.0/0
+            description: "Allow EKS NodeGroup full outbound access"
+            fromPort: 0
+            protocol: all
+            region: patch-target
+            securityGroupIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: sg-eks-nodegroup
+            toPort: 65535
+            type: egress
+      patches:
+        - type: PatchSet
+          patchSetName: region
+
+    # ###############################################
+    # # * * * SERVICES * * *
+    # #
+
+    # # # EKS Cluster # # #
+    - name: eksCluster
+      base:
+        apiVersion: eks.aws.upbound.io/v1beta1
+        kind: Cluster
+        metadata:
+          annotations:
+            meta.upbound.io: eks/v1beta1/cluster
+            uptest.upbound.io/timeout: "2400"
+          labels:
+            parentType: eks
+            resourceType: Cluster
+        spec:
+          forProvider:
+            region: patch-target
+            roleArnSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: role-eks-cluster
+            tags:
+              Name: xplane-eks-cluster
+            vpcConfig:
+              - endpointPrivateAccess: true
+                endpointPublicAccess: true
+                securityIdSelector:
+                  id: sg-eks-cluster
+                  resourceType: SecurityGroup
+                  service: EKS
+                subnetIdSelector:
+                  matchControllerRef: true
+                  # matchLabels:
+                  #   access: private
+                  #   resourceType: Subnet
+          writeConnectionSecretToRef:
+            name: patch-target
+            namespace: patch-target
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.id
+          toFieldPath: metadata.name
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.parameters.version
+          toFieldPath: spec.forProvider.version
+        - type: ToCompositeFieldPath
+          fromFieldPath: status.atProvider.vpcConfig[0].clusterSecurityGroupId
+          toFieldPath: status.eks.vpcConfig.clusterSecurityGroupId
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: metadata.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-eks-cluster"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-eks-cluster"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.writeConnectionSecretToRef.name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-eks-cluster"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.writeConnectionSecretToRef.namespace
+          toFieldPath: spec.writeConnectionSecretToRef.namespace
+      readinessChecks:
+      - type: MatchString
+        fieldPath: status.atProvider.status
+        matchString: ACTIVE
+
+    # # # EKS NodeGroup # # #
+    - name: eksNodeGroup
+      base:
+        apiVersion: eks.aws.upbound.io/v1beta1
+        kind: NodeGroup
+        metadata:
+          labels:
+            parentType: eks
+            resourceType: NodeGroup
+        spec:
+          forProvider:
+            clusterNameSelector:
+              matchControllerRef: true
+              matchLabels:
+                parentType: eks
+                resourceType: Cluster
+            instanceTypes:
+              - patch-target
+            nodeRoleArnSelector:
+              matchControllerRef: true
+              matchLabels:
+                id: role-eks-nodegroup
+            region: patch-target
+            scalingConfig:
+              - desiredSize: 2
+                maxSize: 2
+                minSize: 1
+            subnetIdSelector:
+              matchControllerRef: true
+              matchLabels:
+                access: private
+                resourceType: Subnet
+            tags:
+              Name: xplane-eks-nodegroup
+      patches:
+        - type: PatchSet
+          patchSetName: region
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.environment
+          toFieldPath: spec.forProvider.instanceTypes[0]
+          transforms:
+            - type: map
+              map:
+                poc: t2.small
+                staging: m5a.xlarge
+                pre-prod: m5a.xlarge
+                prod: m5a.xlarge
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.environment
+          toFieldPath: spec.forProvider.scalingConfig[0].desiredSize
+          transforms:
+            - type: map
+              map:
+                poc: 2
+                staging: 6
+                pre-prod: 11
+                prod: 11
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.environment
+          toFieldPath: spec.forProvider.scalingConfig[0].maxSize
+          transforms:
+            - type: map
+              map:
+                poc: 2
+                staging: 18
+                pre-prod: 33
+                prod: 33
+        # - type: FromCompositeFieldPath
+        #   fromFieldPath: status.eks.vpcConfig.clusterSecurityGroupId
+        #   toFieldPath: spec.forProvider.tags[0].key
+        #   transforms:
+        #     - type: string
+        #       string:
+        #         fmt: "kubernetes.io/cluster/%s"
+        - type: FromCompositeFieldPath
+          fromFieldPath: spec.name
+          toFieldPath: spec.forProvider.tags.Name
+          transforms:
+            - type: string
+              string:
+                fmt: "%s-eks-nodegroup"
+
+  

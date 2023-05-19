@@ -1,0 +1,16 @@
+apiVersion: xplane2.demo.tanuu.fi/v1alpha1
+kind: EKS
+metadata:
+  name: xplane-demo-2
+  namespace: upbound-system
+  labels:
+    created_by: daniel_vaskivaara
+    dept: Helsinki-Eyjafjallajokull
+spec:
+  environment: poc
+  name: snarf
+  region: eu-west-2
+  # compositionSelector:
+  #   matchLabels:
+  #     name: eks
+  #     provider: aws
