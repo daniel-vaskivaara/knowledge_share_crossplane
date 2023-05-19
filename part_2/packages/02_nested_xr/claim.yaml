@@ -1,0 +1,15 @@
+apiVersion: xplane2.demo.tanuu.fi/v1alpha1
+kind: NestedEKS
+metadata:
+  name: xplane2-demo
+  namespace: upbound-system
+  labels:
+    created_by: daniel_vaskivaara
+    dept: Helsinki-Eyjafjallajokull
+spec:
+  name: nest
+  region: eu-west-2
+  compositionSelector:
+    matchLabels:
+      service: eks_plus
+      provider: aws

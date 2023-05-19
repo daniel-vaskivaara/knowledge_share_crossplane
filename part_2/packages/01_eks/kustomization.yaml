@@ -1,0 +1,4 @@
+resources:
+- src/xrd.yaml
+- src/eks.yaml
+#- claim.yaml

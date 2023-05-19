@@ -1,0 +1,32 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xnestedekss.xplane2.demo.tanuu.fi
+spec:
+  group: xplane2.demo.tanuu.fi
+  names:
+    kind: XNestedEKS
+    plural: xnestedekss
+  claimNames:
+    kind: NestedEKS
+    plural: nestedekss
+  defaultCompositionRef:
+    name: default
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                name:
+                  type: string
+                region:
+                  type: string
+              required:
+                - name
+                - region

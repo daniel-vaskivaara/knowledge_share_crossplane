@@ -1,0 +1,39 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: Composition
+metadata:
+  name: nested-example
+  labels:
+    service: eks_plus
+    provider: aws
+    type: composition
+spec:
+  compositeTypeRef:
+    apiVersion: xplane2.demo.tanuu.fi/v1alpha1
+    kind: XNestedEKS
+  writeConnectionSecretsToNamespace: upbound-system
+  resources:
+    - name: EKS_Composition
+      base:
+        apiVersion: xplane2.demo.tanuu.fi/v1alpha1
+        kind: XEKS
+        metadata:
+          labels:
+            type: nested_eks_cluster
+          name: eks_bundle
+        spec:
+          environment: poc
+          name: xplane2-demo
+          region: eu-west-2
+    - name: s3Bucket
+      base:
+        apiVersion: s3.aws.upbound.io/v1beta1
+        kind: Bucket
+        metadata:
+          labels:
+            crossplane.io/external-name: xplane2_demo
+          name: xplane2_demo
+        spec:
+          forProvider:
+            forceDestroy: true
+            region: eu-north-1
+    

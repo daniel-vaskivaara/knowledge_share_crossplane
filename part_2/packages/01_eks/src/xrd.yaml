@@ -1,0 +1,52 @@
+apiVersion: apiextensions.crossplane.io/v1
+kind: CompositeResourceDefinition
+metadata:
+  name: xekss.xplane2.demo.tanuu.fi
+spec:
+  group: xplane2.demo.tanuu.fi
+  names:
+    kind: XEKS
+    plural: xekss
+  claimNames:
+    kind: EKS
+    plural: ekss
+  defaultCompositionRef:
+    name: main
+  versions:
+    - name: v1alpha1
+      served: true
+      referenceable: true
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+            spec:
+              type: object
+              properties:
+                environment:
+                  type: string
+                  oneOf:
+                    - pattern: "poc"
+                    - pattern: "staging"
+                    - pattern: "pre-prod"
+                    - pattern: "prod"
+                name:
+                  type: string
+                region:
+                  type: string
+                  default: eu-north-1
+              required:
+                - environment
+                - name
+                - region
+            # status:
+            #   type: object
+            #   properties:
+            #     eks:
+            #       type: object
+            #       properties:
+            #         atProvider:
+            #           type: object
+            #           properties:
+            #             id:
+            #               type: string
