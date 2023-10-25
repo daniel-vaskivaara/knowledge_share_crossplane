@@ -1,0 +1,9 @@
+apiVersion: azure.upbound.io/v1beta1
+kind: ResourceGroup
+metadata:
+  labels:
+    testing.upbound.io/example-name: mssqlelasticpool-rg
+  name: xplane-mssqlpool
+spec:
+  forProvider:
+    location: North Europe

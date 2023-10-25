@@ -1,0 +1,21 @@
+apiVersion: sql.azure.upbound.io/v1beta1
+kind: MSSQLServer
+metadata:
+  annotations:
+    meta.upbound.io/example-id: sql/v1beta1/mssqlelasticpool
+    uptest.upbound.io/timeout: "3600"
+  labels:
+    testing.upbound.io/example-name: mssqlelasticpoolsrv
+  name: mssqlelasticpoolsrv
+spec:
+  forProvider:
+    administratorLogin: 4dm1n157r470r
+    administratorLoginPasswordSecretRef:
+      key: pwd
+      name: mssqlserver
+      namespace: upbound-system
+    location: North Europe
+    resourceGroupNameSelector:
+      matchLabels:
+        testing.upbound.io/example-name: mssqlelasticpool-rg
+    version: "12.0"

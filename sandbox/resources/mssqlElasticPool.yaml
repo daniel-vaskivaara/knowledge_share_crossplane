@@ -1,0 +1,26 @@
+apiVersion: sql.azure.upbound.io/v1beta1
+kind: MSSQLElasticPool
+metadata:
+  annotations:
+    meta.upbound.io/example-id: sql/v1beta1/mssqlelasticpool
+  labels:
+    testing.upbound.io/example-name: xplane-pool-poc
+  name: xplane-pool-poc
+spec:
+  forProvider:
+    location: North Europe
+    maxSizeGb: 5
+    perDatabaseSettings:
+      - maxCapacity: 4
+        minCapacity: 1
+    resourceGroupNameSelector:
+      matchLabels:
+        testing.upbound.io/example-name: mssqlelasticpool-rg
+    serverNameSelector:
+      matchLabels:
+        testing.upbound.io/example-name: mssqlelasticpoolsrv
+    sku:
+      - capacity: 4
+        family: Gen5
+        name: GP_Gen5
+        tier: GeneralPurpose
