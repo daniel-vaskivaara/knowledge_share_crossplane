@@ -45,4 +45,8 @@
 
 ## status check:
 
-`watch kubectl get provider,providerConfig,xrd,composition,xhello,Bucket.s3`
+  Part_1
+  `watch kubectl get provider,providerConfig,xrd,composition,xhello,Bucket.s3`
+
+  Part_2
+  `watch kubectl get EKS,XEKS,eip,internetGateway,NATGateway,role.iam,rolepolicyattachment.iam,Route.ec2,RouteTable.ec2,RouteTableAssociation.ec2,SecurityGroup.ec2,SecurityGroupRule.ec2,subnets,vpc,cluster.eks,nodegroup.eks`
